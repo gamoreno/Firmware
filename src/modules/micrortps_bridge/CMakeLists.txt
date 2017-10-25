@@ -41,12 +41,52 @@ if(NOT FASTRTPSGEN)
 endif()
 
 set(config_rtps_send_topics
-   sensor_combined
+  actuator_armed
+  commander_state
+  home_position
+  led_control
+  mission #offboard_mission
+  vehicle_command_ack
+  vehicle_control_mode
+  vehicle_roi
+  vehicle_status
+  vehicle_status_flags
    )
 
 set(config_rtps_receive_topics
-   sensor_baro
-   )
+  airspeed
+  battery_status
+  actuator_controls
+  cpuload
+  differential_pressure
+  estimator_status
+  geofence_result
+  home_position
+  manual_control_setpoint
+  mission_result
+  offboard_control_mode
+  parameter_update
+  #position_setpoint_triplet
+  safety
+  sensor_accel
+  sensor_combined
+  sensor_correction
+  sensor_gyro
+  sensor_mag
+  sensor_baro
+  sensor_preflight
+  subsystem_info
+  system_power
+  #telemetry_status
+  vehicle_attitude
+  vehicle_command
+  vehicle_global_position
+  vehicle_gps_position
+  vehicle_land_detected
+  vehicle_local_position
+  vehicle_status
+  vtol_vehicle_status
+)
 
 if (FASTRTPSGEN AND (config_rtps_send_topics OR config_rtps_receive_topics))
 	option(GENERATE_RTPS_BRIDGE "enable RTPS and microCDR" ON)

@@ -727,7 +727,7 @@ transition_result_t arm_disarm(bool arm, orb_advert_t *mavlink_log_pub_local, co
 
 	// For HIL platforms, require that simulated sensors are connected
 	if (arm && hrt_absolute_time() > commander_boot_timestamp + INAIR_RESTART_HOLDOFF_INTERVAL &&
-		status.hil_state == vehicle_status_s::HIL_STATE_ON) {
+		status.hil_state != vehicle_status_s::HIL_STATE_ON) {
 
 		mavlink_log_critical(mavlink_log_pub_local, "HITL: Connect to simulator before arming.");
 		return TRANSITION_DENIED;
@@ -2161,6 +2161,7 @@ int commander_thread_main(int argc, char *argv[])
 		if (gpos_updated) {
 			orb_copy(ORB_ID(vehicle_global_position), global_position_sub, &global_position);
 			gpos_last_update_time_us = hrt_absolute_time();
+			PX4_INFO("Got global_position msg\n");
 		}
 
 		// Perform a separate timeout validity test on the global position data.
@@ -3809,6 +3810,9 @@ check_posvel_validity(bool data_valid, float data_accuracy, float required_accur
 
 	// Set validity
 	if (pos_status_changed) {
+		if (!*valid_state && data_stale) {
+			PX4_INFO("Rejecting GPS data stale: now=%" PRIu64 ", data ts=%" PRIu64 ", max delay=%" PRIu64 "\n", now, data_timestamp_us, posctl_nav_loss_delay);
+		}
 		if (*valid_state && (data_stale || !data_valid || pos_inaccurate)) {
 			*valid_state = false;
 			*validity_changed = true;
