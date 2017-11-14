@@ -115,6 +115,14 @@ __EXPORT extern hrt_abstime hrt_store_absolute_time(volatile hrt_abstime *now);
  *   This param is positive if the Linux clock is ahead of the DSP one.
  */
 __EXPORT extern int hrt_set_absolute_time_offset(int32_t time_diff_us);
+#else
+/**
+ * Adjusts the start time to match the time on another FMU.
+ * 
+ * It assumes that time is smaller than the platform internal time.
+ * @param time: new time
+ */
+void hrt_set_absolute_time(hrt_abstime time);
 #endif
 
 /**

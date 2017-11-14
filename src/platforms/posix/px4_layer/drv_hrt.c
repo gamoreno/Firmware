@@ -183,6 +183,17 @@ int hrt_set_absolute_time_offset(int32_t time_diff_us)
 	dsp_offset = time_diff_us;
 	return 0;
 }
+#else
+void hrt_set_absolute_time(hrt_abstime time)
+{
+    struct timespec ts;
+    px4_clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    hrt_abstime platformTime = ts_to_abstime(&ts);
+    if (platformTime >= time) { // avoid underflow
+        px4_timestart =  platformTime - time;
+    }
+}
 #endif
 
 /*
@@ -203,7 +214,7 @@ hrt_abstime hrt_absolute_time(void)
 
 	ret -= _delay_interval;
 
-	if (ret < max_time) {
+    if (ret < max_time) {
 		PX4_ERR("WARNING! TIME IS NEGATIVE! %d vs %d", (int)ret, (int)max_time);
 		ret = max_time;
 	}
