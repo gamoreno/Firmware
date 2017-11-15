@@ -39,8 +39,16 @@ its time with the other computer (main).
 
 UORBCommChannel* UORBCommChannel::_instance = nullptr;
 
-UORBCommChannel::UORBCommChannel() : _channel_rx_handler(nullptr), _timesync_done(false) {}
+UORBCommChannel::UORBCommChannel()
+    : _channel_rx_handler(nullptr),
+      _timesync_done(false)
+{
+    pthread_rwlock_init(&_subscribers_rw_lock, nullptr);
+}
 
+UORBCommChannel::~UORBCommChannel() {
+    pthread_rwlock_destroy(&_subscribers_rw_lock);
+}
 
 UORBCommChannel *UORBCommChannel::get_instance()
 {
@@ -101,6 +109,14 @@ int16_t UORBCommChannel::register_handler(uORBCommunicator::IChannelRxHandler *h
 
 int16_t UORBCommChannel::send_message(const char *message_name, int32_t length, uint8_t *data)
 {
+    pthread_rwlock_rdlock(&_subscribers_rw_lock);
+    bool has_subscribers = (_subscribers.find(message_name) != _subscribers.end());
+    pthread_rwlock_unlock(&_subscribers_rw_lock);
+
+    if (!has_subscribers) {
+        return 0;
+    }
+
     char buffer[BUFFER_SIZE];
     strncpy(buffer, message_name, BUFFER_SIZE - 1);
     buffer[BUFFER_SIZE - 1] = 0;
@@ -145,6 +161,9 @@ bool UORBCommChannel::start(int argc, char *argv[]) {
     bool serial_transport = true;
     bool time_sync = false;
     bool hardware_control_flow = false;
+
+    _should_exit = false;
+    _timesync_should_exit = false;
 
 #ifdef __PX4_POSIX
     uint16_t local_port = 3030;
@@ -234,6 +253,7 @@ bool UORBCommChannel::start(int argc, char *argv[]) {
         return false;
     }
 
+    sem_init(&_timesync_sem, 0, 0);
     if (!thread_start_helper(&_recv_thread, "uorbcomm.rcv", SCHED_PRIORITY_LOG_CAPTURE, receiver_thread_start)) {
         delete _transport;
         return false;
@@ -246,6 +266,11 @@ bool UORBCommChannel::start(int argc, char *argv[]) {
             delete _transport;
             return false;
         }
+
+        // wait to receive the ack from the other end
+        PX4_INFO("waiting for other end to sync");
+        sem_wait(&_timesync_sem);
+        PX4_INFO("sync done");
     }
 
     return true;
@@ -260,6 +285,9 @@ void UORBCommChannel::process_timesync(TimeSyncMsg* timeSyncMsg) {
     hrt_set_absolute_time(timeSyncMsg->master_time);
     PX4_INFO("timesync %" PRIu64 "->%" PRIu64 " (%" PRIu64 ")", before, hrt_absolute_time(), timeSyncMsg->master_time);
     _timesync_done = true;
+
+    char d = 0; // need to send at least one byte
+    _transport->write_msg(MSG_TYPE_TIMESYNC_ACK, &d, sizeof(d));
 }
 
 void *UORBCommChannel::receiver_thread_start(void *)
@@ -283,6 +311,9 @@ void UORBCommChannel::receiver_thread() {
             if (msg_type == MSG_TYPE_TIMESYNC) {
                 process_timesync((TimeSyncMsg*) buffer);
                 continue;
+            } else if (msg_type == MSG_TYPE_TIMESYNC_ACK) {
+               sem_post(&_timesync_sem);
+               _timesync_should_exit = true;
             }
 
             if (_channel_rx_handler == nullptr) {
@@ -301,10 +332,16 @@ void UORBCommChannel::receiver_thread() {
                 {
                     int32_t msg_rate_hz = *((int32_t*) msg_data);
                     //PX4_INFO("received add_subscription(%s)", message_name);
+                    pthread_rwlock_wrlock(&_subscribers_rw_lock);
+                    _subscribers.insert(message_name);
+                    pthread_rwlock_unlock(&_subscribers_rw_lock);
                     _channel_rx_handler->process_add_subscription(message_name, msg_rate_hz);
                 }
                     break;
                 case MSG_TYPE_REMOVE_SUBSCRIBER:
+                    pthread_rwlock_wrlock(&_subscribers_rw_lock);
+                    _subscribers.erase(message_name);
+                    pthread_rwlock_unlock(&_subscribers_rw_lock);
                     _channel_rx_handler->process_remove_subscription(message_name);
                     break;
             case MSG_TYPE_ADVERTISE:
@@ -318,6 +355,7 @@ void UORBCommChannel::receiver_thread() {
                     _channel_rx_handler->process_received_message(message_name,
                                                              data_length, msg_data);
                     break;
+
                 default:
                     PX4_WARN("Unexpected message type\n");
                 break;
@@ -339,7 +377,7 @@ void *UORBCommChannel::timesync_thread_start(void *)
 void UORBCommChannel::timesync_thread() {
 
     // send the current time every 1 second
-    while (!_should_exit) {
+    while (!_timesync_should_exit) {
         TimeSyncMsg time_sync_msg;
         time_sync_msg.master_time = hrt_absolute_time();
         _transport->write_msg(MSG_TYPE_TIMESYNC, (char*) &time_sync_msg, sizeof(time_sync_msg));
