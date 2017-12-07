@@ -22,7 +22,7 @@ UDPTransport::~UDPTransport()
 	close();
 }
 
-int UDPTransport::open()
+int UDPTransport::open_impl()
 {
     /* set remote address */
     memset((char *) &_remoteaddr, 0, sizeof(_remoteaddr));

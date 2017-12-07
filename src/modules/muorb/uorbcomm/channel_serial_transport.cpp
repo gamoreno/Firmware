@@ -22,7 +22,7 @@ SerialTransport::~SerialTransport()
 	close();
 }
 
-int SerialTransport::open()
+int SerialTransport::open_impl()
 {
     /* open uart */
     _uart_fd = ::open(_uart_name.c_str(), O_RDWR | O_NOCTTY); //  | O_NONBLOCK ?

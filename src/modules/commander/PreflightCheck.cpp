@@ -617,6 +617,7 @@ bool preflightCheck(orb_advert_t *mavlink_log_pub, bool checkSensors, bool check
 	PX4_WARN("Preflight checks always pass on OcPoC.");
 	checkSensors = false;
 #endif
+    checkSensors = false;
 
 	bool failed = false;
 

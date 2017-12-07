@@ -10,11 +10,11 @@ public:
     UDPTransport(uint16_t _local_port, const char *_remote_host, uint16_t _remote_port);
     virtual ~UDPTransport();
 
-    int open();
     void close();
     bool is_open();
 
 protected:
+    int open_impl();
     ssize_t read(void *buffer, size_t length);
     ssize_t write(void *buffer, size_t length);
 

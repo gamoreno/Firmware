@@ -3793,10 +3793,18 @@ check_posvel_validity(bool data_valid, float data_accuracy, float required_accur
 		*last_fail_time_us = now;
 	}
 
-	bool data_stale = (now - data_timestamp_us > posctl_nav_loss_delay);
+    bool data_stale = (now - data_timestamp_us > posctl_nav_loss_delay);
 
 	// Set validity
 	if (pos_status_changed) {
+        static bool staleness_warned = false;
+        if (!staleness_warned && !*valid_state && data_stale) {
+                PX4_WARN("Rejecting GPS data stale: now=%" PRIu64 ", da\
+ta ts=%" PRIu64 ", max delay=%" PRIu64 "\n", now, data_timestamp_us, posctl_nav\
+_loss_delay);
+                staleness_warned = true;
+        }
+
 		if (*valid_state && (data_stale || !data_valid || pos_inaccurate)) {
 			*valid_state = false;
 			*validity_changed = true;

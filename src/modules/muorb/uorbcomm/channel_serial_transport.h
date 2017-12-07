@@ -11,13 +11,13 @@ public:
     SerialTransport(const char *uart_name, uint32_t _baudrate, bool hardware_control_flow);
     virtual ~SerialTransport();
 
-    int open();
     void close();
     bool is_open();
 
     static bool baudrate_to_speed(uint32_t bauds, speed_t *speed);
 protected:
     int enable_flow_control(bool enabled);
+    int open_impl();
     ssize_t read(void *buffer, size_t length);
     ssize_t write(void *buffer, size_t length);
 

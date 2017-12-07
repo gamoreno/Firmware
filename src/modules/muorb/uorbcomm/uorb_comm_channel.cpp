@@ -6,6 +6,9 @@
 #include <px4_module.h>
 #include "channel_serial_transport.h"
 #include "channel_udp_transport.h"
+#include <string>
+
+using namespace std;
 
 namespace uORB
 {
@@ -40,14 +43,15 @@ its time with the other computer (main).
 UORBCommChannel* UORBCommChannel::_instance = nullptr;
 
 UORBCommChannel::UORBCommChannel()
-    : _channel_rx_handler(nullptr),
-      _timesync_done(false)
+    : _channel_rx_handler(nullptr)
 {
     pthread_rwlock_init(&_subscribers_rw_lock, nullptr);
+    pthread_rwlock_init(&_rate_limiting_rw_lock, nullptr);
 }
 
 UORBCommChannel::~UORBCommChannel() {
     pthread_rwlock_destroy(&_subscribers_rw_lock);
+    pthread_rwlock_destroy(&_rate_limiting_rw_lock);
 }
 
 UORBCommChannel *UORBCommChannel::get_instance()
@@ -86,13 +90,18 @@ int16_t UORBCommChannel::add_subscription(const char *message_name, int32_t msgR
     ssize_t msg_len = strlen(buffer) + 1;
     *((int32_t*) (buffer + msg_len)) = msgRateInHz;
     msg_len += sizeof(int32_t);
-    //PX4_INFO("send add_subscription(%s)", message_name);
+//    if (std::string(message_name).find("vehicle_control_mode") != string::npos) {
+//        PX4_INFO("sending add_subscription(%s) @ %" PRIu64, message_name, hrt_absolute_time());
+//    }
     ssize_t written = _transport->write_msg(MSG_TYPE_ADD_SUBSCRIBER, buffer, msg_len);
     return (written == msg_len) ? 0 : -1;
 }
 
 int16_t UORBCommChannel::remove_subscription(const char *message_name)
 {
+//    if (std::string(message_name).find("vehicle_control_mode") != string::npos) {
+//        PX4_INFO("sending REMOVE_subscription(%s)", message_name);
+//    }
     char buffer[BUFFER_SIZE];
     strncpy(buffer, message_name, BUFFER_SIZE - 1);
     buffer[BUFFER_SIZE - 1] = 0;
@@ -113,7 +122,24 @@ int16_t UORBCommChannel::send_message(const char *message_name, int32_t length, 
     bool has_subscribers = (_subscribers.find(message_name) != _subscribers.end());
     pthread_rwlock_unlock(&_subscribers_rw_lock);
 
-    if (!has_subscribers) {
+//    if (std::string(message_name).find("vehicle_control_mode") != string::npos) {
+//        PX4_INFO("send message (%s) has subscribers %d", message_name, has_subscribers);
+//    }
+
+    if (!_send_with_no_subscriber && !has_subscribers) {
+            return 0;
+    }
+
+    pthread_rwlock_rdlock(&_rate_limiting_rw_lock);
+    auto entry = _rate_limiting.find(message_name);
+    pthread_rwlock_unlock(&_rate_limiting_rw_lock);
+
+    if (entry == _rate_limiting.end()) {
+        pthread_rwlock_wrlock(&_rate_limiting_rw_lock);
+        auto new_entry = _rate_limiting.insert(std::pair<std::string, MavlinkRateLimiter>(message_name, MavlinkRateLimiter(250 * 1000)));
+        pthread_rwlock_unlock(&_rate_limiting_rw_lock);
+        new_entry.first->second.check(hrt_absolute_time());
+    } else if (!entry->second.check(hrt_absolute_time())) {
         return 0;
     }
 
@@ -130,19 +156,19 @@ int16_t UORBCommChannel::send_message(const char *message_name, int32_t length, 
     return (written == msg_len) ? 0 : -1;
 }
 
-bool UORBCommChannel::thread_start_helper(pthread_t *new_thread, const char *name, int priority, void *(*start_routine) (void *)) {
-    pthread_attr_t receiveloop_attr;
-    pthread_attr_init(&receiveloop_attr);
+bool UORBCommChannel::thread_start_helper(pthread_t *new_thread, const char *name, int priority, void *(*start_routine) (void *), void *arg) {
+    pthread_attr_t thread_attr;
+    pthread_attr_init(&thread_attr);
 
     struct sched_param param;
-    (void)pthread_attr_getschedparam(&receiveloop_attr, &param);
+    (void)pthread_attr_getschedparam(&thread_attr, &param);
     param.sched_priority = priority;
-    (void)pthread_attr_setschedparam(&receiveloop_attr, &param);
+    (void)pthread_attr_setschedparam(&thread_attr, &param);
 
-    pthread_attr_setstacksize(&receiveloop_attr, PX4_STACK_ADJUSTED(2840));
-    int error = pthread_create(new_thread, &receiveloop_attr, start_routine, (void *)nullptr);
+    pthread_attr_setstacksize(&thread_attr, PX4_STACK_ADJUSTED(2840));
+    int error = pthread_create(new_thread, &thread_attr, start_routine, arg);
 
-    pthread_attr_destroy(&receiveloop_attr);
+    pthread_attr_destroy(&thread_attr);
 
     if (error) {
         PX4_ERR("starting thread %s: %s", name, strerror(error));
@@ -164,6 +190,7 @@ bool UORBCommChannel::start(int argc, char *argv[]) {
 
     _should_exit = false;
     _timesync_should_exit = false;
+    _send_with_no_subscriber = false;
 
 #ifdef __PX4_POSIX
     uint16_t local_port = 3030;
@@ -177,7 +204,7 @@ bool UORBCommChannel::start(int argc, char *argv[]) {
     int myoptind = 1;
     const char *myoptarg = nullptr;
 
-    while ((ch = px4_getopt(argc, argv, "b:d:u:o:t:shf", &myoptind, &myoptarg)) != EOF) {
+    while ((ch = px4_getopt(argc, argv, "b:d:u:o:t:shfn", &myoptind, &myoptarg)) != EOF) {
         switch (ch) {
         case 'b':
             baudrate = strtoul(myoptarg, nullptr, 10);
@@ -195,6 +222,10 @@ bool UORBCommChannel::start(int argc, char *argv[]) {
 
         case 'h':
             err_flag = true;
+            break;
+
+        case 'n':
+            _send_with_no_subscriber = true;
             break;
 
         case 's':
@@ -254,40 +285,42 @@ bool UORBCommChannel::start(int argc, char *argv[]) {
     }
 
     sem_init(&_timesync_sem, 0, 0);
-    if (!thread_start_helper(&_recv_thread, "uorbcomm.rcv", SCHED_PRIORITY_LOG_CAPTURE, receiver_thread_start)) {
+    if (!thread_start_helper(&_recv_thread, "uorbcomm.rcv", SCHED_PRIORITY_SLOW_DRIVER, receiver_thread_start, this)) {
         delete _transport;
         return false;
     }
 
     if (time_sync) {
-        if (!thread_start_helper(&_timesync_thread, "uorbcomm.ts", SCHED_PRIORITY_DEFAULT, timesync_thread_start)) {
+        if (!thread_start_helper(&_timesync_thread, "uorbcomm.ts", SCHED_PRIORITY_DEFAULT, timesync_thread_start, this)) {
             _should_exit = true;
             pthread_join(_recv_thread, nullptr);
             delete _transport;
             return false;
         }
-
-        // wait to receive the ack from the other end
-        PX4_INFO("waiting for other end to sync");
-        sem_wait(&_timesync_sem);
-        PX4_INFO("sync done");
+    } else {
+        send_end_ready();
     }
+
+    _send_time_sync = time_sync;
+
+    // wait for the other end to be ready
+    PX4_INFO("waiting for other end to be ready");
+    sem_wait(&_timesync_sem);
+    PX4_INFO("other end is ready");
 
     return true;
 }
 
 
 void UORBCommChannel::process_timesync(TimeSyncMsg* timeSyncMsg) {
-    if (_timesync_done) {
-        return;
-    }
-    hrt_abstime before = hrt_absolute_time();
-    hrt_set_absolute_time(timeSyncMsg->master_time);
-    PX4_INFO("timesync %" PRIu64 "->%" PRIu64 " (%" PRIu64 ")", before, hrt_absolute_time(), timeSyncMsg->master_time);
-    _timesync_done = true;
 
-    char d = 0; // need to send at least one byte
-    _transport->write_msg(MSG_TYPE_TIMESYNC_ACK, &d, sizeof(d));
+    // catch up with the master time, but never go back in time
+
+    hrt_abstime now = hrt_absolute_time();
+    if (timeSyncMsg->master_time > now) {
+        hrt_set_absolute_time(timeSyncMsg->master_time);
+        PX4_INFO("timesync %" PRIu64 "->%" PRIu64 " (%" PRIu64 ")", now, hrt_absolute_time(), timeSyncMsg->master_time);
+    }
 }
 
 void *UORBCommChannel::receiver_thread_start(void *)
@@ -311,9 +344,10 @@ void UORBCommChannel::receiver_thread() {
             if (msg_type == MSG_TYPE_TIMESYNC) {
                 process_timesync((TimeSyncMsg*) buffer);
                 continue;
-            } else if (msg_type == MSG_TYPE_TIMESYNC_ACK) {
+            } else if (msg_type == MSG_TYPE_CHANNEL_END_READY) {
                sem_post(&_timesync_sem);
-               _timesync_should_exit = true;
+               //_timesync_should_exit = true;
+               continue;
             }
 
             if (_channel_rx_handler == nullptr) {
@@ -331,7 +365,12 @@ void UORBCommChannel::receiver_thread() {
                 case MSG_TYPE_ADD_SUBSCRIBER:
                 {
                     int32_t msg_rate_hz = *((int32_t*) msg_data);
-                    //PX4_INFO("received add_subscription(%s)", message_name);
+//                    static bool done = false;
+//                    //if (std::string(message_name).find("vehicle_control_mode") != string::npos) {
+//                    if (!done) {
+//                        done = true;
+//                        PX4_INFO("received add_subscription(%s) @ %" PRIu64, message_name, hrt_absolute_time());
+//                    }
                     pthread_rwlock_wrlock(&_subscribers_rw_lock);
                     _subscribers.insert(message_name);
                     pthread_rwlock_unlock(&_subscribers_rw_lock);
@@ -339,6 +378,9 @@ void UORBCommChannel::receiver_thread() {
                 }
                     break;
                 case MSG_TYPE_REMOVE_SUBSCRIBER:
+//                if (std::string(message_name).find("vehicle_control_mode") != string::npos) {
+//                    PX4_INFO("received REMOVE_subscription(%s)", message_name);
+//                }
                     pthread_rwlock_wrlock(&_subscribers_rw_lock);
                     _subscribers.erase(message_name);
                     pthread_rwlock_unlock(&_subscribers_rw_lock);
@@ -351,7 +393,9 @@ void UORBCommChannel::receiver_thread() {
                 _channel_rx_handler->process_remote_topic(message_name, false);
                 break;
                 case MSG_TYPE_MSG:
-                    //PX4_INFO("invoking  RxHandler->process_received_message(%s, %d, msgData)", message_name, dataLength);
+//                    if (std::string(message_name).find("vehicle_control_mode") != string::npos) {
+//                        PX4_INFO("invoking  RxHandler->process_received_message(%s, %d, msgData)", message_name, data_length);
+//                    }
                     _channel_rx_handler->process_received_message(message_name,
                                                              data_length, msg_data);
                     break;
@@ -376,13 +420,26 @@ void *UORBCommChannel::timesync_thread_start(void *)
 
 void UORBCommChannel::timesync_thread() {
 
+    static int count = 0;
     // send the current time every 1 second
     while (!_timesync_should_exit) {
-        TimeSyncMsg time_sync_msg;
-        time_sync_msg.master_time = hrt_absolute_time();
-        _transport->write_msg(MSG_TYPE_TIMESYNC, (char*) &time_sync_msg, sizeof(time_sync_msg));
+        send_end_ready();
+
+        if (count > 0) {
+            count--;
+        } else if (_send_time_sync) {
+            TimeSyncMsg time_sync_msg;
+            time_sync_msg.master_time = hrt_absolute_time();
+            _transport->write_msg(MSG_TYPE_TIMESYNC, (char*) &time_sync_msg, sizeof(time_sync_msg));
+        }
         usleep(1000000);
+        //_transport->print_stats();
     }
+}
+
+void UORBCommChannel::send_end_ready() {
+    char d = 0; // need to send at least one byte
+    _transport->write_msg(MSG_TYPE_CHANNEL_END_READY, &d, sizeof(d));
 }
 
 } // namespace

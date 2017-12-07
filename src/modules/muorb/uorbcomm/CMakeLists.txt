@@ -45,5 +45,6 @@ px4_add_module(
                 channel_udp_transport.cpp
 	DEPENDS
 		platforms__common
+                modules__mavlink
 	)
 # vim: set noet ft=cmake fenc=utf-8 ff=unix :
