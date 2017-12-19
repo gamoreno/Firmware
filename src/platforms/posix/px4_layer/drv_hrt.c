@@ -186,6 +186,7 @@ int hrt_set_absolute_time_offset(int32_t time_diff_us)
 #else
 void hrt_set_absolute_time(hrt_abstime time)
 {
+    pthread_mutex_lock(&_hrt_mutex);
     struct timespec ts;
     px4_clock_gettime(CLOCK_MONOTONIC, &ts);
 
@@ -193,6 +194,7 @@ void hrt_set_absolute_time(hrt_abstime time)
     if (platformTime >= time) { // avoid underflow
         px4_timestart =  platformTime - time;
     }
+    pthread_mutex_unlock(&_hrt_mutex);
 }
 #endif
 
