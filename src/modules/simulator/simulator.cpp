@@ -152,7 +152,12 @@ int Simulator::start(int argc, char *argv[])
 			udp_port = atoi(argv[4]);
 		}
 
-		if (argv[2][1] == 's') {
+        if (strcmp(argv[argc - 1], "-x") == 0) {
+            PX4_INFO("Simulation delay compensation disabled");
+            _instance->_compensate_delay = false;
+        }
+
+        if (argv[2][1] == 's') {
 			_instance->initializeSensorData();
 #ifndef __PX4_QURT
 			// Update sensor data

@@ -1,6 +1,6 @@
 uorb start
-#uorbcomm -u 2021 -o 2020
-uorbcomm -d /dev/ttyUSB0 -b 230400
+uorbcomm -u 2021 -o 2020 -s
+#uorbcomm -d /dev/ttyUSB0 -b 230400 -s
 sleep 1
 param load
 dataman start -f rootfs/fs/microsd/dataman2

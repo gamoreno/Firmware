@@ -1,7 +1,7 @@
 uorb start
-simulator start -s
-#uorbcomm -u 2020 -o 2021 -s
-uorbcomm -d /dev/ttyUSB1 -b 230400 -s
+simulator start -s -x
+uorbcomm -u 2020 -o 2021
+#uorbcomm -d /dev/ttyUSB1 -b 230400
 sleep 1
 param load
 dataman start

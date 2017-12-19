@@ -286,7 +286,7 @@ void Simulator::handle_message(mavlink_message_t *msg, bool publish)
 			mavlink_hil_sensor_t imu;
 			mavlink_msg_hil_sensor_decode(msg, &imu);
 
-			bool compensation_enabled = (imu.time_usec > 0);
+            bool compensation_enabled = _compensate_delay && (imu.time_usec > 0);
 
 			// set temperature to a decent value
 			imu.temperature = 32.0f;
@@ -825,7 +825,7 @@ void Simulator::pollForMAVLinkMessages(bool publish, int udp_port)
 
 		//timed out
 		if (pret == 0) {
-			if (!sim_delay) {
+            if (_compensate_delay && !sim_delay) {
 				// we do not want to spam the console by default
 				// PX4_WARN("mavlink sim timeout for %d ms", max_wait_ms);
 				sim_delay = true;

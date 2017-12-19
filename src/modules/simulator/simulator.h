@@ -252,6 +252,7 @@ private:
 		_battery_pub(nullptr),
 		_param_sub(-1),
 		_initialized(false),
+        _compensate_delay(true),
 		_realtime_factor(1.0),
 		_system_type(0)
 #ifndef __PX4_QURT
@@ -338,6 +339,7 @@ private:
 	int				_param_sub;
 
 	bool _initialized;
+    bool _compensate_delay;
 	double _realtime_factor;		///< How fast the simulation runs in comparison to real system time
 	hrt_abstime _last_sim_timestamp;
 	hrt_abstime _last_sitl_timestamp;
