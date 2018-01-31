@@ -72,6 +72,7 @@ set(config_module_list
 	modules/systemlib
 	modules/systemlib/mixer
 	modules/uORB
+        modules/muorb/uorbcomm
 	modules/dataman
 	modules/land_detector
 	modules/navigator
